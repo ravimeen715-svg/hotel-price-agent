@@ -1,0 +1,35 @@
+name: Daily Hotel Price Scrape
+
+on:
+  schedule:
+    - cron: '30 2 * * *'   # runs daily 08:00 IST (02:30 UTC) - change if needed
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install selenium pandas openpyxl webdriver-manager python-dotenv
+      - name: Run scraper
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          URLS_JSON: ${{ secrets.URLS_JSON }}
+          DAYS_AHEAD: ${{ secrets.DAYS_AHEAD }}
+          HEADLESS: "true"
+        run: |
+          python hotel_price_agent.py
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: hotel-prices
+          path: grand_uddhav_prices.xlsx
