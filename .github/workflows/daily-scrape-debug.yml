@@ -1,0 +1,36 @@
+name: Daily Hotel Price Scrape (debug)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Show runner info
+        run: |
+          echo "---- RUNNER INFO ----"
+          uname -a
+          lsb_release -a || true
+          echo "USER: $USER"
+          echo "GITHUB_RUN_ID: $GITHUB_RUN_ID"
+          echo "GITHUB_REF: $GITHUB_REF"
+          echo "---- ENV (filtered) ----"
+          env | sort | sed -n '1,200p'
+        shell: bash
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ r
