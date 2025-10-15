@@ -1,35 +1,301 @@
-name: Daily Hotel Price Scrape
+# scrape.py (with start/completion/failure Telegram notifications)
+import os, csv, time, requests, traceback
+from datetime import date, timedelta, datetime
+from bs4 import BeautifulSoup
 
-on:
-  schedule:
-    - cron: '30 2 * * *'   # runs daily 08:00 IST (02:30 UTC) - change if needed
-  workflow_dispatch:
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TARGET_URL = os.getenv("TARGET_URL")  # should include {date} if you want per-date URLs
+DAYS_TO_REPORT = int(os.getenv("DAYS_TO_REPORT", "15"))
+HISTORY_FILE = "history.csv"
+DELAY = float(os.getenv("DELAY", "1.5"))
 
-jobs:
-  scrape:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      - name: Install deps
-        run: pip install selenium pandas openpyxl webdriver-manager python-dotenv
-      - name: Run scraper
-        env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          URLS_JSON: ${{ secrets.URLS_JSON }}
-          DAYS_AHEAD: ${{ secrets.DAYS_AHEAD }}
-          HEADLESS: "true"
-        run: |
-          python hotel_price_agent.py
-      - name: Upload result
-        uses: actions/upload-artifact@v4
-        with:
-          name: hotel-prices
-          path: grand_uddhav_prices.xlsx
+def send_telegram_text(token, chat_id, text):
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        r = requests.post(url, data=data, timeout=30)
+        return r.ok, r.text
+    except Exception as e:
+        print("TG send_text failed:", e)
+        return False, str(e)
+
+def send_telegram_file(token, chat_id, filepath, caption=""):
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendDocument"
+        with open(filepath, "rb") as f:
+            files = {"document": (os.path.basename(filepath), f)}
+            data = {"chat_id": chat_id, "caption": caption}
+            r = requests.post(url, data=data, files=files, timeout=60)
+        return r.ok, r.text
+    except Exception as e:
+        print("TG send_file failed:", e)
+        return False, str(e)
+
+# ---- adjust this to the site's HTML price selector ----
+def extract_price_from_html(html):
+    soup = BeautifulSoup(html, "html.parser")
+    el = soup.select_one(".price") or soup.select_one(".room-price") or soup.select_one("span.price")
+    if not el:
+        return None
+    txt = el.get_text(strip=True)
+    return txt
+
+def fetch_price_for_date(date_str):
+    url = TARGET_URL.replace("{date}", date_str) if "{date}" in TARGET_URL else TARGET_URL
+    headers = {"User-Agent": "Mozilla/5.0 (compatible)"}
+    r = requests.get(url, headers=headers, timeout=25)
+    r.raise_for_status()
+    price = extract_price_from_html(r.text)
+    return price
+
+def load_history():
+    rows = []
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, newline="", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+    return rows
+
+def save_history(rows):
+    with open(HISTORY_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
+
+def percent_change(old, new):
+    try:
+        o = float(''.join(ch for ch in old if (ch.isdigit() or ch=='.')) )
+        n = float(''.join(ch for ch in new if (ch.isdigit() or ch=='.')) )
+        if o == 0:
+            return None
+        return (n - o) / o * 100.0
+    except Exception:
+        return None
+
+def build_summary_lines(new_rows, history):
+    lines = []
+    lines.append(f"Hotel prices ({new_rows[0][0]} → {new_rows[-1][0]})")
+    lines.append("")
+    for d, p, ts in new_rows:
+        prev_day = (date.fromisoformat(d) - timedelta(days=1)).isoformat()
+        prev_day_price = None
+        for h in history[1:]:
+            if h[0] == prev_day:
+                prev_day_price = h[1]
+                break
+        pct = percent_change(prev_day_price, p) if prev_day_price and p else None
+        chg = f" ({pct:+.1f}%)" if pct is not None else ""
+        lines.append(f"{d}: {p or 'NOT_FOUND'}{chg}")
+    return lines
+
+def main_job():
+    start = date.today()
+    dates = [(start + timedelta(days=i)).isoformat() for i in range(DAYS_TO_REPORT)]
+
+    history = load_history()
+    if not history:
+        history = [["date", "price", "checked_at"]]
+
+    new_rows = []
+    for d in dates:
+        try:
+            price = fetch_price_for_date(d)
+            status = price or "NOT_FOUND"
+        except Exception as e:
+            price = ""
+            status = f"ERROR: {e}"
+        checked_at = datetime.utcnow().isoformat()
+        new_rows.append([d, price or status, checked_at])
+        time.sleep(DELAY)
+
+    existing_dates = {r[0] for r in history[1:]}
+    for r in new_rows:
+        if r[0] not in existing_dates:
+            history.append(r)
+        else:
+            for idx in range(1, len(history)):
+                if history[idx][0] == r[0]:
+                    history[idx] = r
+                    break
+
+    save_history(history)
+    return new_rows, history
+
+if __name__ == "__main__":
+    # send start notification (optional)
+    started = False
+    try:
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            ok, _ = send_telegram_text(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID,
+                                      f"🔔 <b>Scrape started</b>\nJob: {DAYS_TO_REPORT} days\nTime (UTC): {datetime.utcnow().isoformat()}")
+            started = ok
+        new_rows, history = main_job()
+        summary_lines = build_summary_lines(new_rows, history)
+        text = "\n".join(summary_lines)
+        print(text)
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            ok_text, resp_text = send_telegram_text(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, text)
+            ok_file, resp_file = send_telegram_file(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, HISTORY_FILE,
+                                        caption=f"History {history[1][0]} ... {history[-1][0]}")
+            # final completion message
+            comp_msg = f"✅ <b>Scrape completed</b>\nSuccess: {ok_text}\nFile sent: {ok_file}\nRows saved: {len(history)-1}\nTime (UTC): {datetime.utcnow().isoformat()}"
+            send_telegram_text(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, comp_msg)
+        else:
+            print("Telegram creds missing; not sending notifications")
+    except Exception as exc:
+        err = traceback.format_exc()
+        print("Fatal error:", err)
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            send_telegram_text(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID,
+                               f"❌ <b>Scrape failed</b>\nError: {str(exc)}\nTime (UTC): {datetime.utcnow().isoformat()}")
+        raise  # re-raise so GitHub Action shows failure# scrape.py (with start/completion/failure Telegram notifications)
+import os, csv, time, requests, traceback
+from datetime import date, timedelta, datetime
+from bs4 import BeautifulSoup
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TARGET_URL = os.getenv("TARGET_URL")  # should include {date} if you want per-date URLs
+DAYS_TO_REPORT = int(os.getenv("DAYS_TO_REPORT", "15"))
+HISTORY_FILE = "history.csv"
+DELAY = float(os.getenv("DELAY", "1.5"))
+
+def send_telegram_text(token, chat_id, text):
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        r = requests.post(url, data=data, timeout=30)
+        return r.ok, r.text
+    except Exception as e:
+        print("TG send_text failed:", e)
+        return False, str(e)
+
+def send_telegram_file(token, chat_id, filepath, caption=""):
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendDocument"
+        with open(filepath, "rb") as f:
+            files = {"document": (os.path.basename(filepath), f)}
+            data = {"chat_id": chat_id, "caption": caption}
+            r = requests.post(url, data=data, files=files, timeout=60)
+        return r.ok, r.text
+    except Exception as e:
+        print("TG send_file failed:", e)
+        return False, str(e)
+
+# ---- adjust this to the site's HTML price selector ----
+def extract_price_from_html(html):
+    soup = BeautifulSoup(html, "html.parser")
+    el = soup.select_one(".price") or soup.select_one(".room-price") or soup.select_one("span.price")
+    if not el:
+        return None
+    txt = el.get_text(strip=True)
+    return txt
+
+def fetch_price_for_date(date_str):
+    url = TARGET_URL.replace("{date}", date_str) if "{date}" in TARGET_URL else TARGET_URL
+    headers = {"User-Agent": "Mozilla/5.0 (compatible)"}
+    r = requests.get(url, headers=headers, timeout=25)
+    r.raise_for_status()
+    price = extract_price_from_html(r.text)
+    return price
+
+def load_history():
+    rows = []
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, newline="", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+    return rows
+
+def save_history(rows):
+    with open(HISTORY_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
+
+def percent_change(old, new):
+    try:
+        o = float(''.join(ch for ch in old if (ch.isdigit() or ch=='.')) )
+        n = float(''.join(ch for ch in new if (ch.isdigit() or ch=='.')) )
+        if o == 0:
+            return None
+        return (n - o) / o * 100.0
+    except Exception:
+        return None
+
+def build_summary_lines(new_rows, history):
+    lines = []
+    lines.append(f"Hotel prices ({new_rows[0][0]} → {new_rows[-1][0]})")
+    lines.append("")
+    for d, p, ts in new_rows:
+        prev_day = (date.fromisoformat(d) - timedelta(days=1)).isoformat()
+        prev_day_price = None
+        for h in history[1:]:
+            if h[0] == prev_day:
+                prev_day_price = h[1]
+                break
+        pct = percent_change(prev_day_price, p) if prev_day_price and p else None
+        chg = f" ({pct:+.1f}%)" if pct is not None else ""
+        lines.append(f"{d}: {p or 'NOT_FOUND'}{chg}")
+    return lines
+
+def main_job():
+    start = date.today()
+    dates = [(start + timedelta(days=i)).isoformat() for i in range(DAYS_TO_REPORT)]
+
+    history = load_history()
+    if not history:
+        history = [["date", "price", "checked_at"]]
+
+    new_rows = []
+    for d in dates:
+        try:
+            price = fetch_price_for_date(d)
+            status = price or "NOT_FOUND"
+        except Exception as e:
+            price = ""
+            status = f"ERROR: {e}"
+        checked_at = datetime.utcnow().isoformat()
+        new_rows.append([d, price or status, checked_at])
+        time.sleep(DELAY)
+
+    existing_dates = {r[0] for r in history[1:]}
+    for r in new_rows:
+        if r[0] not in existing_dates:
+            history.append(r)
+        else:
+            for idx in range(1, len(history)):
+                if history[idx][0] == r[0]:
+                    history[idx] = r
+                    break
+
+    save_history(history)
+    return new_rows, history
+
+if __name__ == "__main__":
+    # send start notification (optional)
+    started = False
+    try:
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            ok, _ = send_telegram_text(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID,
+                                      f"🔔 <b>Scrape started</b>\nJob: {DAYS_TO_REPORT} days\nTime (UTC): {datetime.utcnow().isoformat()}")
+            started = ok
+        new_rows, history = main_job()
+        summary_lines = build_summary_lines(new_rows, history)
+        text = "\n".join(summary_lines)
+        print(text)
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            ok_text, resp_text = send_telegram_text(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, text)
+            ok_file, resp_file = send_telegram_file(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, HISTORY_FILE,
+                                        caption=f"History {history[1][0]} ... {history[-1][0]}")
+            # final completion message
+            comp_msg = f"✅ <b>Scrape completed</b>\nSuccess: {ok_text}\nFile sent: {ok_file}\nRows saved: {len(history)-1}\nTime (UTC): {datetime.utcnow().isoformat()}"
+            send_telegram_text(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, comp_msg)
+        else:
+            print("Telegram creds missing; not sending notifications")
+    except Exception as exc:
+        err = traceback.format_exc()
+        print("Fatal error:", err)
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            send_telegram_text(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID,
+                               f"❌ <b>Scrape failed</b>\nError: {str(exc)}\nTime (UTC): {datetime.utcnow().isoformat()}")
+        raise  # re-raise so GitHub Action shows failure
