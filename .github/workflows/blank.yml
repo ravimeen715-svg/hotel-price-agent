@@ -34,3 +34,7 @@ jobs:
         run: |
           echo Add other actions to build,
           echo test, and deploy your project.
+          on:
+  schedule:
+    - cron: '0 6 * * *'  # daily at 6 AM UTC (11:30 AM IST)
+  workflow_dispatch:
