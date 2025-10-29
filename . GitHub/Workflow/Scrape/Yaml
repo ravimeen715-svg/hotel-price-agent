@@ -2,7 +2,7 @@ name: Daily Hotel Price Scraper
 
 on:
   schedule:
-    - cron: "0 0 * * *"  # हर दिन आधी रात को
+    -- cron: "0 0 * * *"  # हर दिन आधी रात ko 
   workflow_dispatch:
 
 jobs:
