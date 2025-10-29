@@ -1,54 +1,55 @@
-
 name: Daily Hotel Price Scrape
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 2 * * *'  # रोज़ सुबह 2 बजे UTC
+    - cron: '0 2 * * *'
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
       - name: Run scraper
         env:
-          API_KEY: ${{ secrets.API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TARGET_URL: ${{ secrets.TARGET_URL }}
+          DAYS_TO_REPORT: ${{ secrets.DAYS_TO_REPORT }}
+          DELAY: ${{ secrets.DELAY }}
         run: python scrape.pyname: Daily Hotel Price Scrape
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 2 * * *'  # रोज़ सुबह 2 बजे UTC
+    - cron: '0 2 * * *'
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
       - name: Run scraper
         env:
-          API_KEY: ${{ secrets.API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TARGET_URL: ${{ secrets.TARGET_URL }}
+          DAYS_TO_REPORT: ${{ secrets.DAYS_TO_REPORT }}
+          DELAY: ${{ secrets.DELAY }}
         run: python scrape.py
