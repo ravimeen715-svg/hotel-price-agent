@@ -1,83 +1,54 @@
+
 name: Daily Hotel Price Scrape
 
 on:
-  schedule:
-    - cron: '0 6 * * *'   # every day 11:30 AM IST
   workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'  # रोज़ सुबह 2 बजे UTC
 
 jobs:
-  run-scraper:
+  scrape:
     runs-on: ubuntu-latest
-    env:
-      TZ: 'Asia/Kolkata'
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y chromium-browser chromium-chromedriver
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run scrape script
+      - name: Run scraper
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python scrape.py
-
-      - name: Commit results
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add data/hotel_prices.csv || true
-          git diff --staged --quiet || (git commit -m "Auto-update hotel data [skip ci]" && git push)name: Daily Hotel Price Scrape
+          API_KEY: ${{ secrets.API_KEY }}
+        run: python scrape.pyname: Daily Hotel Price Scrape
 
 on:
-  schedule:
-    - cron: '0 6 * * *'   # every day 11:30 AM IST
   workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'  # रोज़ सुबह 2 बजे UTC
 
 jobs:
-  run-scraper:
+  scrape:
     runs-on: ubuntu-latest
-    env:
-      TZ: 'Asia/Kolkata'
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y chromium-browser chromium-chromedriver
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run scrape script
+      - name: Run scraper
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python scrape.py
-
-      - name: Commit results
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add data/hotel_prices.csv || true
-          git diff --staged --quiet || (git commit -m "Auto-update hotel data [skip ci]" && git push)
+          API_KEY: ${{ secrets.API_KEY }}
+        run: python scrape.py
